@@ -1,0 +1,72 @@
+---
+# defaults file for certs
+
+# Source selection — where the cert/key come from before distribution:
+#   certbot_host       Read cert/key from one managed host (optionally run
+#                      `certbot renew` there first). The renew-and-fan-out model.
+#   controller_fixture Read cert/key from the Ansible control node filesystem
+#                      (air-gapped/offline distribution and Molecule tests).
+#   nfs_share          Copy cert/key from a path already mounted on each target.
+certs_source_mode: certbot_host
+
+# Host that holds the source certs. If empty, the first host in the play is used.
+certs_source_host: ""
+
+# The certificate's domain. Drives the default certbot live-dir and the default
+# destination filenames below.
+certs_domain_name: example.com
+
+# certbot_host mode: where the live cert/key live on the source host.
+certs_certbot_live_dir: "/etc/letsencrypt/live/{{ certs_domain_name }}"
+certs_certbot_fullchain_path: "{{ certs_certbot_live_dir }}/fullchain.pem"
+certs_certbot_privkey_path: "{{ certs_certbot_live_dir }}/privkey.pem"
+certs_renew_before_distribute: true
+certs_renew_command: certbot renew
+
+# certbot_host mode: optionally write a certbot DNS-plugin credentials file on the
+# source host just for the renew, then delete it. Plugin-agnostic — put the whole
+# file body in certs_dns_credentials_content (vault it). Cloudflare example:
+#   certs_dns_credentials_content: "dns_cloudflare_api_token = {{ vault_cf_token }}"
+# For other plugins, point certs_dns_credentials_path at that plugin's ini and set
+# its expected content.
+certs_manage_dns_credentials: false
+certs_dns_credentials_path: /root/.secrets/certbot/cloudflare.ini
+certs_dns_credentials_content: ""
+
+# controller_fixture mode: cert/key files on the control node. Required when this
+# mode is used (Molecule generates throwaway files and overrides these).
+certs_controller_fullchain_path: ""
+certs_controller_privkey_path: ""
+
+# nfs_share mode: cert/key paths already present on each target host.
+certs_nfs_fullchain_path: /backups/certs/fullchain.pem
+certs_nfs_privkey_path: /backups/certs/privkey.pem
+
+# Destination cert/key layout on managed hosts.
+certs_path: /etc/ssl/certs
+certs_key_path: /etc/ssl/keys
+certs_target_cert_filename: "{{ certs_domain_name }}.pem"
+certs_target_key_filename: "{{ certs_domain_name }}.key"
+certs_target_cert_mode: "0644"
+certs_target_key_mode: "0600"
+
+# Optional extra destination copies to arbitrary hosts (e.g. an appliance that
+# wants the cert in its own path). Delegated, so the target need not be in the
+# current play's install loop. Example:
+# certs_delegate_copies:
+#   - host: appliance.example.com
+#     cert_dest: /root/ssl/example.com.pem
+#     key_dest: /root/ssl/example.com.key
+#     cert_mode: "0644"   # optional, default 0644
+#     key_mode: "0600"    # optional, default 0600
+certs_delegate_copies: []
+
+# Optional symlinks pointing at the deployed cert/key (for services that expect
+# certs at a fixed path, e.g. GitLab Omnibus). Created on the hosts where set.
+# Example:
+# certs_symlinks:
+#   - src: "{{ certs_path }}/{{ certs_target_cert_filename }}"
+#     dest: /etc/gitlab/ssl/example.com.crt
+#   - src: "{{ certs_key_path }}/{{ certs_target_key_filename }}"
+#     dest: /etc/gitlab/ssl/example.com.key
+certs_symlinks: []

@@ -1,0 +1,243 @@
+---
+- name: Validate certs source mode
+  ansible.builtin.assert:
+    that:
+      - certs_source_mode in ["certbot_host", "controller_fixture", "nfs_share"]
+    fail_msg: "certs_source_mode must be one of: certbot_host, controller_fixture, nfs_share"
+
+- name: Validate controller_fixture paths are set
+  ansible.builtin.assert:
+    that:
+      - certs_controller_fullchain_path | length > 0
+      - certs_controller_privkey_path | length > 0
+    fail_msg: "controller_fixture mode requires certs_controller_fullchain_path and certs_controller_privkey_path"
+  when: certs_source_mode == "controller_fixture"
+
+- name: Resolve effective certificate source host
+  ansible.builtin.set_fact:
+    certs_effective_source_host: >-
+      {{
+        certs_source_host
+        if (certs_source_host | length > 0)
+        else ansible_play_hosts_all[0]
+      }}
+  run_once: true
+  delegate_to: localhost
+  delegate_facts: true
+
+- name: Ensure certbot DNS credential directory exists on source host
+  become: true
+  ansible.builtin.file:
+    path: "{{ certs_dns_credentials_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  run_once: true
+  delegate_to: "{{ hostvars['localhost'].certs_effective_source_host }}"
+  when:
+    - certs_source_mode == "certbot_host"
+    - certs_manage_dns_credentials
+    - certs_dns_credentials_content | length > 0
+
+- name: Configure certbot DNS credential file on source host
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ certs_dns_credentials_path }}"
+    content: "{{ certs_dns_credentials_content }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  run_once: true
+  delegate_to: "{{ hostvars['localhost'].certs_effective_source_host }}"
+  no_log: true
+  when:
+    - certs_source_mode == "certbot_host"
+    - certs_manage_dns_credentials
+    - certs_dns_credentials_content | length > 0
+
+- name: Optionally renew certificates on source host
+  become: true
+  ansible.builtin.command: "{{ certs_renew_command }}"
+  register: certs_renew_result
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ hostvars['localhost'].certs_effective_source_host }}"
+  when:
+    - certs_source_mode == "certbot_host"
+    - certs_renew_before_distribute
+    - not ansible_check_mode
+
+- name: Read fullchain from certbot source host
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ certs_certbot_fullchain_path }}"
+  register: certs_fullchain_slurp
+  run_once: true
+  delegate_to: "{{ hostvars['localhost'].certs_effective_source_host }}"
+  when: certs_source_mode == "certbot_host"
+
+- name: Read privkey from certbot source host
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ certs_certbot_privkey_path }}"
+  register: certs_privkey_slurp
+  run_once: true
+  delegate_to: "{{ hostvars['localhost'].certs_effective_source_host }}"
+  when: certs_source_mode == "certbot_host"
+
+- name: Read fullchain from controller fixture
+  ansible.builtin.set_fact:
+    certs_fullchain_content: "{{ lookup('ansible.builtin.file', certs_controller_fullchain_path) }}"
+  run_once: true
+  delegate_to: localhost
+  delegate_facts: true
+  when: certs_source_mode == "controller_fixture"
+
+- name: Read privkey from controller fixture
+  ansible.builtin.set_fact:
+    certs_privkey_content: "{{ lookup('ansible.builtin.file', certs_controller_privkey_path) }}"
+  run_once: true
+  delegate_to: localhost
+  delegate_facts: true
+  no_log: true
+  when: certs_source_mode == "controller_fixture"
+
+- name: Store decoded cert data from certbot source
+  ansible.builtin.set_fact:
+    certs_fullchain_content: "{{ certs_fullchain_slurp.content | b64decode }}"
+    certs_privkey_content: "{{ certs_privkey_slurp.content | b64decode }}"
+  run_once: true
+  delegate_to: localhost
+  delegate_facts: true
+  no_log: true
+  when: certs_source_mode == "certbot_host"
+
+- name: Cleanup certbot DNS credential file on source host
+  become: true
+  ansible.builtin.file:
+    path: "{{ certs_dns_credentials_path }}"
+    state: absent
+  run_once: true
+  delegate_to: "{{ hostvars['localhost'].certs_effective_source_host }}"
+  changed_when: false
+  when:
+    - certs_source_mode == "certbot_host"
+    - certs_manage_dns_credentials
+    - certs_dns_credentials_content | length > 0
+
+- name: Ensure destination certificate directories exist
+  become: true
+  ansible.builtin.file:
+    state: directory
+    path: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ certs_path }}", mode: "0755" }
+    - { path: "{{ certs_key_path }}", mode: "0700" }
+
+- name: Install certificate and key from nfs share
+  become: true
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+    remote_src: true
+  loop:
+    - src: "{{ certs_nfs_fullchain_path }}"
+      dest: "{{ certs_path }}/{{ certs_target_cert_filename }}"
+      mode: "{{ certs_target_cert_mode }}"
+    - src: "{{ certs_nfs_privkey_path }}"
+      dest: "{{ certs_key_path }}/{{ certs_target_key_filename }}"
+      mode: "{{ certs_target_key_mode }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  when: certs_source_mode == "nfs_share"
+
+- name: Install certificate and key from loaded content
+  become: true
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - content: "{{ hostvars['localhost'].certs_fullchain_content }}"
+      dest: "{{ certs_path }}/{{ certs_target_cert_filename }}"
+      mode: "{{ certs_target_cert_mode }}"
+    - content: "{{ hostvars['localhost'].certs_privkey_content }}"
+      dest: "{{ certs_key_path }}/{{ certs_target_key_filename }}"
+      mode: "{{ certs_target_key_mode }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: true
+  when: certs_source_mode in ["certbot_host", "controller_fixture"]
+
+- name: Ensure delegated copy destination directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.cert_dest | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ certs_delegate_copies }}"
+  loop_control:
+    label: "{{ item.host }}"
+  run_once: true
+  delegate_to: "{{ item.host }}"
+  when:
+    - certs_source_mode in ["certbot_host", "controller_fixture"]
+    - certs_delegate_copies | length > 0
+
+- name: Copy certificate to delegated host paths
+  become: true
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost'].certs_fullchain_content }}"
+    dest: "{{ item.cert_dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.cert_mode | default('0644') }}"
+  loop: "{{ certs_delegate_copies }}"
+  loop_control:
+    label: "{{ item.host }}"
+  run_once: true
+  delegate_to: "{{ item.host }}"
+  when:
+    - certs_source_mode in ["certbot_host", "controller_fixture"]
+    - certs_delegate_copies | length > 0
+
+- name: Copy private key to delegated host paths
+  become: true
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost'].certs_privkey_content }}"
+    dest: "{{ item.key_dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.key_mode | default('0600') }}"
+  loop: "{{ certs_delegate_copies }}"
+  loop_control:
+    label: "{{ item.host }}"
+  run_once: true
+  delegate_to: "{{ item.host }}"
+  no_log: true
+  when:
+    - certs_source_mode in ["certbot_host", "controller_fixture"]
+    - certs_delegate_copies | length > 0
+
+- name: Create symlinks to the deployed certificate/key
+  become: true
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+    force: true
+  loop: "{{ certs_symlinks }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  when: certs_symlinks | length > 0

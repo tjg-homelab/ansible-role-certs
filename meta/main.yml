@@ -1,0 +1,30 @@
+---
+galaxy_info:
+  role_name: certs
+  author: rnissen
+  description: >-
+    Distribute TLS certificates and keys to Linux hosts from a central source
+    (a certbot host, the control node, or an NFS share), with optional delegated
+    copies and symlinks
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - tls
+    - ssl
+    - certificates
+    - certbot
+    - letsencrypt
+
+dependencies: []

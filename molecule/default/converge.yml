@@ -1,0 +1,24 @@
+---
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    certs_source_mode: controller_fixture
+    certs_domain_name: molecule.test
+    certs_controller_fullchain_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/fullchain.pem"
+    certs_controller_privkey_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/privkey.pem"
+    # Exercise the generic symlink feature (replaces the old GitLab special-case).
+    certs_symlinks:
+      - src: "{{ certs_path }}/{{ certs_target_cert_filename }}"
+        dest: "{{ certs_path }}/service.crt"
+      - src: "{{ certs_key_path }}/{{ certs_target_key_filename }}"
+        dest: "{{ certs_key_path }}/service.key"
+    # Exercise delegated fan-out to a specific host.
+    certs_delegate_copies:
+      - host: certs-ubuntu2404
+        cert_dest: /root/ssl/molecule.test.pem
+        key_dest: /root/ssl/molecule.test.key
+  tasks:
+    - name: Include certs role
+      ansible.builtin.include_role:
+        name: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"

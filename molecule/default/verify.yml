@@ -1,0 +1,74 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Stat deployed certificate
+      ansible.builtin.stat:
+        path: /etc/ssl/certs/molecule.test.pem
+      register: certs_cert_stat
+
+    - name: Stat deployed private key
+      ansible.builtin.stat:
+        path: /etc/ssl/keys/molecule.test.key
+      register: certs_key_stat
+
+    - name: Assert cert and key exist with expected modes
+      ansible.builtin.assert:
+        that:
+          - certs_cert_stat.stat.exists
+          - certs_key_stat.stat.exists
+          - certs_cert_stat.stat.mode == "0644"
+          - certs_key_stat.stat.mode == "0600"
+
+    - name: Read deployed certificate
+      ansible.builtin.slurp:
+        src: /etc/ssl/certs/molecule.test.pem
+      register: certs_cert_contents
+
+    - name: Assert deployed file is a real certificate
+      ansible.builtin.assert:
+        that:
+          - "'-----BEGIN CERTIFICATE-----' in (certs_cert_contents.content | b64decode)"
+
+    - name: Stat cert symlink
+      ansible.builtin.stat:
+        path: /etc/ssl/certs/service.crt
+      register: certs_cert_link
+
+    - name: Stat key symlink
+      ansible.builtin.stat:
+        path: /etc/ssl/keys/service.key
+      register: certs_key_link
+
+    - name: Assert symlinks point at the deployed files
+      ansible.builtin.assert:
+        that:
+          - certs_cert_link.stat.exists
+          - certs_cert_link.stat.islnk
+          - certs_cert_link.stat.lnk_source == "/etc/ssl/certs/molecule.test.pem"
+          - certs_key_link.stat.exists
+          - certs_key_link.stat.islnk
+          - certs_key_link.stat.lnk_source == "/etc/ssl/keys/molecule.test.key"
+
+- name: Verify delegated fan-out
+  hosts: certs-ubuntu2404
+  become: true
+  tasks:
+    - name: Stat delegated cert copy
+      ansible.builtin.stat:
+        path: /root/ssl/molecule.test.pem
+      register: certs_delegated_cert
+
+    - name: Stat delegated key copy
+      ansible.builtin.stat:
+        path: /root/ssl/molecule.test.key
+      register: certs_delegated_key
+
+    - name: Assert delegated copies landed with expected modes
+      ansible.builtin.assert:
+        that:
+          - certs_delegated_cert.stat.exists
+          - certs_delegated_cert.stat.mode == "0644"
+          - certs_delegated_key.stat.exists
+          - certs_delegated_key.stat.mode == "0600"
